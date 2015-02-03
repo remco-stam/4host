@@ -13,5 +13,8 @@ As input we used: `CRN.txt` (as published by Stam et al 2013), `Phyca11.fasta` (
 The resulting fasta file `something.fasta` was used in Agilent's earray software https://earray.chem.agilent.com/earray/ to generate the probeset. All earray files can be found in `Something`
 
 
+#####Microarray analysis
+The microarray data was analysed using `limma` from the `bioconductor` package. [here](http://www.bioconductor.org/packages/release/bioc/html/limma.html)
+
 
 
