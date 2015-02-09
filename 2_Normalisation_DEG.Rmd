@@ -1,0 +1,205 @@
+---
+title: "4Host Normalisation & DEG analysis"
+author: "R. Stam"
+date: "3 February 2015"
+output: html_document
+---
+
+Load libraries
+```{r, message=FALSE, warning=FALSE, error=FALSE}
+library("limma")
+library("statmod")
+```
+
+Read in data
+```{r, message=FALSE, warning=FALSE, error=FALSE}
+setwd("/Users/rstam/Dropbox/4host_microarray/Array_Raw/sorted_probes")
+files <- dir(pattern="*\\.txt$")
+data <- read.maimages(files, source="agilent",columns=list(G = "gMedianSignal", Gb = "gBGMeanSignal"))
+data.bg <-backgroundCorrect(data, method="normexp")
+
+setwd("/Users/rstam/Dropbox/4host_microarray/Analyses/Remco")
+```
+
+Remove negative and low expressed
+```{r}
+neg95 <- apply(data.bg$E[data.bg$genes$ControlType==-1,],2,function(data.bg) quantile(data.bg ,p=0.95)) # 95th percentile of the negative control probes used as negative number
+cutoff <- matrix(neg95,nrow(data.bg),ncol(data.bg),byrow=TRUE)
+isexpr <- rowSums(data.bg$E > cutoff) >= 4 # Cutoff set at 4 arrays, meaning probe must be above BG in at least one timepoint
+table(isexpr) # 18000 Pcap probes on the array with values higher than BG.
+data.bg <- data.bg[data.bg$genes$ControlType==0 & isexpr,] # regular probes are 0 and should be in isexpr
+```
+
+Quantile normalisation
+```{r}
+data.q<-normalizeBetweenArrays(data.bg,method="quantile")
+data.q.avg <- avereps(data.q, ID=data.q$genes$ProbeName)
+
+# Plot graphs, normalisation looks fine
+par(mfrow=c(1,2))
+boxplot(data$E, las=2, col= c("pink", "pink","pink","pink","red","red","red","red",
+                              "green","green","green", "green","magenta","magenta","magenta", "magenta"))
+boxplot(data.q$E, las=2, col= c("pink", "pink","pink","pink","red","red","red","red",
+                                "green","green","green", "green","magenta","magenta","magenta", "magenta"))
+
+```
+
+
+Build design matrix
+```{r}
+Ca <-c(1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0)
+Cs <-c(0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0)
+Nb <-c(0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0)
+Sl <-c(0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1)
+design <- cbind(files,Ca,Cs,Nb,Sl)
+rownames(design)<-design[,1]
+design<-as.matrix(design[,2:5])
+class(design)<-"numeric"
+```
+
+Fit data and create individual contrasts to analyse
+```{r}
+fit <- lmFit(data.q.avg, design)
+contrasts <- makeContrasts(Ca-Cs,Ca-Nb,Ca-Sl,Cs-Nb,Cs-Sl,Nb-Sl,levels=c("Ca","Cs","Nb","Sl"))
+contrastsCa <- makeContrasts(Ca-Cs,Ca-Nb,Ca-Sl,levels=c("Ca","Cs","Nb","Sl"))
+contrastsCs <- makeContrasts(Cs-Ca,Cs-Nb,Cs-Sl,levels=c("Ca","Cs","Nb","Sl"))
+contrastsNb <- makeContrasts(Nb-Ca,Nb-Cs,Nb-Sl,levels=c("Ca","Cs","Nb","Sl"))
+contrastsSl <- makeContrasts(Sl-Ca,Sl-Cs,Sl-Nb,levels=c("Ca","Cs","Nb","Sl"))
+```
+
+Calculate DEGs in the whole experiment
+```{r}
+options(digits=2)
+
+fitAll <- contrasts.fit(fit, contrasts)
+fitAll <- eBayes(fitAll)
+results <- decideTests(fitAll)
+summary(results)
+```
+
+Write out table with p-values for all DEGs and table for all genes.
+These files can be used to extract gene names for DEGs and also to see how significantly changing a gene is.
+```{r}
+topAll <- topTable(fitAll, adjust="BH", number = 3000, p.value = 0.05)
+topAll_table <- topAll[,c(5,12:15)]
+rownames(topAll_table) <- NULL
+#write.table(topAll_table, file="2-1_4host_DEGs.txt", quote = FALSE, sep="\t" )
+
+All <- topTable(fitAll, adjust="BH", number = 200000)
+All_table <- All[,c(5,12:15)]
+rownames(All_table) <- NULL
+#write.table(All_table, file="2-2_4host_all.txt", quote = FALSE, sep="\t" )
+```
+
+
+Draw Venn diagrams to show the differently expressed genes between the species
+```{r}
+par(mfrow=c(2,2))
+fitCa <- contrasts.fit(fit, contrastsCa)
+fitCa <- eBayes(fitCa)
+resultsCa <- decideTests(fitCa)
+summary(resultsCa)
+vennDiagram(resultsCa)
+
+fitCs <- contrasts.fit(fit, contrastsCs)
+fitCs <- eBayes(fitCs)
+resultsCs <- decideTests(fitCs)
+summary(resultsCs)
+vennDiagram(resultsCs)
+
+fitNb <- contrasts.fit(fit, contrastsNb)
+fitNb <- eBayes(fitNb)
+resultsNb <- decideTests(fitNb)
+summary(resultsNb)
+vennDiagram(resultsNb)
+
+fitSl <- contrasts.fit(fit, contrastsSl)
+fitSl <- eBayes(fitSl)
+resultsSl <- decideTests(fitSl)
+summary(resultsSl)
+vennDiagram(resultsSl)
+```
+
+Turn data into dataframe for follow up.
+```{r}
+#Make df
+data.q.frame <- as.data.frame.EList(data.q.avg, row.names = NULL, )
+rownames(data.q.frame) <- data.q.frame$SystematicName
+data.q.frame <- data.q.frame[,6:21]
+
+# Calculate means
+data.q.frame$mCa <- rowMeans(subset(data.q.frame, select = c("Ca_1_sorted", "Ca_2_sorted", "Ca_3_sorted", "Ca_4_sorted")), na.rm = TRUE)
+data.q.frame$mCs <- rowMeans(subset(data.q.frame, select = c("Cs_1_sorted", "Cs_2_sorted", "Cs_3_sorted", "Cs_4_sorted")), na.rm = TRUE)
+data.q.frame$mNb <- rowMeans(subset(data.q.frame, select = c("Nb_1_sorted", "Nb_2_sorted", "Nb_3_sorted", "Nb_4_sorted")), na.rm = TRUE)
+data.q.frame$mSl <- rowMeans(subset(data.q.frame, select = c("Sl_1_sorted", "Sl_2_sorted", "Sl_3_sorted", "Sl_4_sorted")), na.rm = TRUE)
+
+#Subset tables (all values, means)
+data.means <- data.q.frame[,17:20]
+data <- data.q.frame[,1:16]
+
+#write.table(data, file="2_Normalised_data_all.txt", quote = FALSE, sep="\t" )
+#write.table(data.means, file="2_Normalised_data_means.txt", quote = FALSE, sep="\t" )
+
+```
+
+Plot Barplots for four markergenes. If normalisation worked, they should all show similar levels in each host, but different levels when compared to each other: Tub and Hmp1 high, Cdc14 and Npp1 low.
+```{r}
+##MULTIPLE BARPLOTS: CONTROLS
+sterr <- function(x) sd(x, na.rm = TRUE)/sqrt(length(x))
+x <- list(1:4, 5:8, 8:12, 13:16)
+
+## Get data for Hmp1 and tubulin and other 'controls'
+par(mfrow=c(2,2))
+
+Hmp1 <- do.call(cbind, lapply(x, function(i) rowMeans(data["Phyca11_8692",i])))
+Hmp1Sd <- do.call(cbind, lapply(x, function(i) sd(data[1,i])))
+Hmp1Ser <- do.call(cbind, lapply(x, function(i) sterr(data[1,i])))
+
+bary <- barplot(Hmp1, ylab = "N exp", ylim = c(0,20), main = "Hmp1", col = "lightgrey")
+labels <- paste(c("pepper","cucumber","benthamiana","tomato"))
+text(c(0.75,2,3.25,4.5), par("usr")[3] - 1, srt = 45, adj = 1,
+     labels = labels, xpd = TRUE)
+arrows(bary ,Hmp1+Hmp1Ser, bary, Hmp1, angle=90, code=1, length = 0.05)
+arrows(bary ,Hmp1-Hmp1Ser, bary, Hmp1, angle=90, code=1, length = 0.05)
+
+
+Tub <- do.call(cbind, lapply(x, function(i) rowMeans(data["Phyca11_576734",i])))
+TubSd <- do.call(cbind, lapply(x, function(i) sd(data[1,i])))
+TubSer <- do.call(cbind, lapply(x, function(i) sterr(data[1,i])))
+
+bary <- barplot(Tub, ylab = "N exp", ylim = c(0,15), main = "Tubulin", col = "lightgrey")
+labels <- paste(c("pepper","cucumber","benthamiana","tomato"))
+text(c(0.75,2,3.25,4.5), par("usr")[3] - 1, srt = 45, adj = 1,
+     labels = labels, xpd = TRUE)
+arrows(bary ,Tub+TubSer, bary, Tub, angle=90, code=1, length = 0.05)
+arrows(bary ,Tub-TubSer, bary, Tub, angle=90, code=1, length = 0.05)
+
+Npp1 <- do.call(cbind, lapply(x, function(i) rowMeans(data["Phyca11_11951",i])))
+Npp1Sd <- do.call(cbind, lapply(x, function(i) sd(data[1,i])))
+Npp1Ser <- do.call(cbind, lapply(x, function(i) sterr(data[1,i])))
+
+bary <- barplot(Npp1, ylab = "N exp", ylim = c(0,10), main = "Npp1", col = "lightgrey")
+labels <- paste(c("pepper","cucumber","benthamiana","tomato"))
+text(c(0.75,2,3.25,4.5), par("usr")[3] - 1, srt = 45, adj = 1,
+     labels = labels, xpd = TRUE)
+arrows(bary ,Npp1+Npp1Ser, bary, Npp1, angle=90, code=1, length = 0.05)
+arrows(bary ,Npp1-Npp1Ser, bary, Npp1, angle=90, code=1, length = 0.05)
+
+Cdc14 <- do.call(cbind, lapply(x, function(i) rowMeans(data["Phyca11_510939",i])))
+Cdc14Sd <- do.call(cbind, lapply(x, function(i) sd(data[1,i])))
+Cdc14Ser <- do.call(cbind, lapply(x, function(i) sterr(data[1,i])))
+
+bary <- barplot(Cdc14, ylab = "N exp", ylim = c(0,10), main = "Cdc14", col = "lightgrey")
+labels <- paste(c("pepper","cucumber","benthamiana","tomato"))
+text(c(0.75,2,3.25,4.5), par("usr")[3] - 1, srt = 45, adj = 1,
+     labels = labels, xpd = TRUE)
+arrows(bary ,Cdc14+Cdc14Ser, bary, Cdc14, angle=90, code=1, length = 0.05)
+arrows(bary ,Cdc14-Cdc14Ser, bary, Cdc14, angle=90, code=1, length = 0.05)
+```
+
+
+```{r}
+## WRITE OUTPUT TABLE
+data.means.DEG <- data.means[topAll_table[,1],]
+write.table(data.means.DEG, file="2_Normalised_data_DEGs.txt", quote=FALSE, sep="\t")
+```
